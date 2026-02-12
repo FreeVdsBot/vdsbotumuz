@@ -13,7 +13,7 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "8438264875:AAHs3soTwFQCsYmWLmAuHKHXLrCNk_9lyos"
+BOT_TOKEN = "8587429954:AAEaVLl4lpHTc9Wf8wc4IZGSzhiXiTLNPns"
 
 DATA_FILE = "data.json"
 LOG_FILE = "logs.txt"
