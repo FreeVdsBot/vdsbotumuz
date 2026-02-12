@@ -1,15 +1,24 @@
 import os
+import json
 import subprocess
 import threading
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
 
-# ====== AYARLAR ======
 BOT_TOKEN = "8486391588:AAEuBbgpmwnMwB6IW_Zlg6oUTxfE0X44fac"
-ADMIN_ID = 8352226813  # Admin Telegram ID
-# =====================
 
+DATA_FILE = "data.json"
+LOG_FILE = "logs.txt"
+
+# ================== WEB SERVER ==================
 app = Flask(__name__)
 
 @app.route("/")
@@ -21,41 +30,44 @@ def run_web():
 
 threading.Thread(target=run_web).start()
 
-# ===== GLOBAL =====
+# ================== DATA ==================
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w") as f:
+        json.dump({"current_file": None}, f)
+
+def load_data():
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
 current_process = None
-current_file = None
-log_file = "bot_logs.txt"
 
-# ===== ADMIN KONTROL =====
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
-# ===== START =====
+# ================== START ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text("VDS Bot Hazır.")
+    await update.message.reply_text("VDS Panel Hazır.\nDosya gönder, sonra /calistir")
 
-# ===== DOSYA YÜKLEME =====
-async def upload_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_file
-    if not is_admin(update.effective_user.id):
-        return
-
+# ================== DOSYA YÜKLE ==================
+async def upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.document:
         file = await update.message.document.get_file()
-        file_path = update.message.document.file_name
-        await file.download_to_drive(file_path)
-        current_file = file_path
-        await update.message.reply_text(f"{file_path} yüklendi.")
+        filename = update.message.document.file_name
+        await file.download_to_drive(filename)
 
-# ===== DOSYA BAŞLAT =====
+        data = load_data()
+        data["current_file"] = filename
+        save_data(data)
+
+        await update.message.reply_text(f"{filename} yüklendi.")
+
+# ================== ÇALIŞTIR ==================
 async def run_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_process, current_file
-    if not is_admin(update.effective_user.id):
-        return
+    global current_process
+    data = load_data()
 
-    if not current_file:
+    if not data["current_file"]:
         await update.message.reply_text("Önce dosya yükle.")
         return
 
@@ -63,35 +75,31 @@ async def run_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Zaten çalışıyor.")
         return
 
-    with open(log_file, "w") as f:
-        pass
-
     current_process = subprocess.Popen(
-        ["python", current_file],
-        stdout=open(log_file, "a"),
+        ["python", data["current_file"]],
+        stdout=open(LOG_FILE, "a"),
         stderr=subprocess.STDOUT
     )
 
     keyboard = [
         [
             InlineKeyboardButton("Durdur", callback_data="stop"),
-            InlineKeyboardButton("Sil", callback_data="delete")
+            InlineKeyboardButton("Sil", callback_data="delete"),
         ]
     ]
 
     await update.message.reply_text(
-        f"{current_file} başlatıldı.",
+        "Başlatıldı.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ===== DURDUR / SİL =====
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global current_process, current_file
+# ================== DURDUR/SİL ==================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global current_process
     query = update.callback_query
     await query.answer()
 
-    if not is_admin(query.from_user.id):
-        return
+    data = load_data()
 
     if query.data == "stop":
         if current_process:
@@ -99,43 +107,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_process = None
             await query.edit_message_text("Durduruldu.")
         else:
-            await query.edit_message_text("Çalışan dosya yok.")
+            await query.edit_message_text("Çalışan yok.")
 
     elif query.data == "delete":
-        if current_file:
+        if data["current_file"]:
             try:
-                os.remove(current_file)
-                current_file = None
-                await query.edit_message_text("Dosya silindi.")
+                os.remove(data["current_file"])
+                data["current_file"] = None
+                save_data(data)
+                await query.edit_message_text("Silindi.")
             except:
                 await query.edit_message_text("Silinemedi.")
-        else:
-            await query.edit_message_text("Dosya yok.")
 
-# ===== LOG GÖSTER =====
+# ================== LOGLAR ==================
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    if not os.path.exists(log_file):
+    if not os.path.exists(LOG_FILE):
         await update.message.reply_text("Log yok.")
         return
 
-    with open(log_file, "r") as f:
-        data = f.read()
+    with open(LOG_FILE, "r") as f:
+        content = f.read()
 
-    if not data:
-        data = "Boş log."
+    if not content:
+        content = "Boş log."
 
-    await update.message.reply_text(data[:4000])
+    await update.message.reply_text(content[:4000])
 
-# ===== PIP YÜKLE =====
+# ================== PIP ==================
 async def pip_install(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    if len(context.args) == 0:
-        await update.message.reply_text("Kullanım: /pip paketadı")
+    if not context.args:
+        await update.message.reply_text("Kullanım: /pip paket")
         return
 
     package = context.args[0]
@@ -148,10 +149,9 @@ async def pip_install(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     output = process.communicate()[0]
-
     await update.message.reply_text(output[:4000])
 
-# ===== BOT BAŞLAT =====
+# ================== MAIN ==================
 def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -159,8 +159,8 @@ def main():
     app_bot.add_handler(CommandHandler("calistir", run_file))
     app_bot.add_handler(CommandHandler("loglar", logs))
     app_bot.add_handler(CommandHandler("pip", pip_install))
-    app_bot.add_handler(MessageHandler(filters.Document.ALL, upload_file))
-    app_bot.add_handler(telegram.ext.CallbackQueryHandler(button_handler))
+    app_bot.add_handler(MessageHandler(filters.Document.ALL, upload))
+    app_bot.add_handler(CallbackQueryHandler(buttons))
 
     app_bot.run_polling()
 
